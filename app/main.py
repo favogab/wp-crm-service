@@ -16,6 +16,14 @@ from fastapi import FastAPI, Depends, HTTPException, Response, Security
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, EmailStr, Field
 
+from contextlib import asynccontextmanager
+from fastapi import HTTPException
+
+from app.database import (
+    initialize_database,
+    save_lead,
+)
+
 # Load local environment variables before configuring the service.
 load_dotenv()
 
@@ -37,9 +45,19 @@ def verify_api_key(api_key: str | None = Security(api_key_header)):
         )
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Initialize persistent storage when FastAPI starts."""
+
+    initialize_database()
+
+    yield
+
+
 app = FastAPI(
     title="WP CRM Bridge — CRM Service",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 @app.get("/health")
@@ -57,23 +75,20 @@ class Lead(BaseModel):
     message: str = Field(min_length=1, max_length=5000)
 
 
-# Temporary development storage.
-# Records disappear whenever the Python process restarts.
-received_leads = {}
-
-
-
 @app.post(
     "/api/leads",
     status_code=201,
-    dependencies=[Depends(verify_api_key)]
+    dependencies=[Depends(verify_api_key)],
 )
-def receive_lead(lead: Lead, response: Response):
-    """Accept an authenticated lead without creating duplicates."""
 
-    if lead.reference in received_leads:
-        # Repeated delivery of the same reference is acknowledged.
-        # We will add payload-conflict detection in a later session.
+
+def receive_lead(lead: Lead, response: Response):
+    """Store a lead and return an accurate delivery result."""
+
+    result = save_lead(lead)
+
+    if result == "duplicate":
+        # A retry of an already stored lead is successful.
         response.status_code = 200
 
         return {
@@ -82,11 +97,16 @@ def receive_lead(lead: Lead, response: Response):
             "reference": lead.reference,
         }
 
-    received_leads[lead.reference] = lead.model_dump(mode="json")
+    if result == "conflict":
+        # Never silently replace an existing CRM record.
+        raise HTTPException(
+            status_code=409,
+            detail="Lead reference exists with different data.",
+        )
 
+    # A genuinely new record was created.
     return {
         "success": True,
-        "message": "Lead received successfully.",
+        "message": "Lead stored successfully.",
         "reference": lead.reference,
     }
-

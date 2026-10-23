@@ -9,3 +9,8 @@ __pycache__/
 .env.*
 !.env.example
 .vscode/
+
+# Local CRM database files (may contain customer information)
+*.db
+*.db-shm
+*.db-wal
