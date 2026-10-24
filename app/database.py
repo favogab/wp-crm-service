@@ -64,7 +64,6 @@ def find_lead(reference):
     return dict(row) if row else None
 
 
-
 def save_lead(lead):
     """
     Save a lead without overwriting an existing record.
